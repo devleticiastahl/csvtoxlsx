@@ -1,67 +1,89 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-import time
+import chardet
 
-st.set_page_config(
-    page_title="Conversor CSV para XLSX",
-    page_icon=":bar_chart:",
-    layout="centered"
-)
+def detect_delimiter_and_encoding(uploaded_file):
+    """Detecta automaticamente delimitador e encoding do arquivo"""
+    content = uploaded_file.read()
+    uploaded_file.seek(0)
+    
+    encoding = chardet.detect(content)['encoding']
+    first_line = content.decode(encoding).split('\n')[0]
+    delimiters = [',', ';', '\t', '|']
+    delimiter_counts = {delim: first_line.count(delim) for delim in delimiters}
+    return max(delimiter_counts, key=delimiter_counts.get), encoding
 
-def convert_csv_to_xlsx(uploaded_file, delimiter=','):
+def convert_csv_to_xlsx(uploaded_file, delimiter=None, encoding=None):
+    """Converte CSV para XLSX com tratamento robusto de erros"""
     try:
-        df = pd.read_csv(uploaded_file, delimiter=delimiter)
+        if delimiter is None or encoding is None:
+            delimiter, encoding = detect_delimiter_and_encoding(uploaded_file)
+            st.info(f"Detectado: delimitador '{delimiter}', encoding {encoding}")
+        
+        df = pd.read_csv(
+            uploaded_file,
+            delimiter=delimiter,
+            encoding=encoding,
+            engine='python',
+            on_bad_lines='warn',
+            thousands=',',
+            decimal='.'
+        )
+        
+        if df.empty:
+            raise ValueError("Arquivo CSV vazio ou sem dados válidos.")
+            
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False, sheet_name='Sheet1')
+        
         return output.getvalue(), df.shape, None
     except Exception as e:
         return None, None, str(e)
 
 def main():
     st.title("📊 Conversor de CSV para XLSX")
-    st.markdown("""
-    Faça upload de um arquivo CSV e converta para o formato XLSX (Excel) facilmente!
-    """)
-    
-    uploaded_file = st.file_uploader(
-        "Escolha um arquivo CSV", 
-        type=["csv", "txt"],
-        accept_multiple_files=False
-    )
+    uploaded_file = st.file_uploader("Escolha um arquivo CSV", type=["csv", "txt"])
     
     with st.expander("Opções avançadas"):
-        delimiter = st.text_input("Delimitador (padrão é vírgula)", value=",")
-        st.caption("Use '\\t' para tabulação ou outro caractere como delimitador.")
+        delimiter = st.text_input("Delimitador (deixe em branco para auto-detecção)", value=",")
+        encoding = st.text_input("Encoding (deixe em branco para auto-detecção)", value="utf-8")
     
     if uploaded_file is not None:
-        st.success("Arquivo carregado com sucesso!")
-      
-        st.subheader("Prévia dos dados")
+        st.success("Arquivo carregado!")
+        
         try:
-            df_preview = pd.read_csv(uploaded_file, delimiter=delimiter)
-            st.dataframe(df_preview.head())
+            detected_delim, detected_enc = detect_delimiter_and_encoding(uploaded_file)
+            uploaded_file.seek(0)
+            
+            df_preview = pd.read_csv(
+                uploaded_file,
+                delimiter=delimiter if delimiter else detected_delim,
+                encoding=encoding if encoding else detected_enc,
+                engine='python',
+                nrows=5
+            )
+            st.dataframe(df_preview)
+            uploaded_file.seek(0)
         except Exception as e:
-            st.error(f"Erro ao ler o arquivo: {e}")
+            st.error(f"Erro ao ler: {e}")
             return
         
         if st.button("Converter para XLSX"):
             with st.spinner("Convertendo..."):
-                xlsx_data, shape, error = convert_csv_to_xlsx(uploaded_file, delimiter)
+                xlsx_data, shape, error = convert_csv_to_xlsx(
+                    uploaded_file,
+                    delimiter if delimiter else None,
+                    encoding if encoding else None
+                )
                 
                 if error:
-                    st.error(f"Erro na conversão: {error}")
+                    st.error(f"Erro: {error}")
                 else:
-                    st.success("Conversão concluída com sucesso!")
-                    st.info(f"Arquivo convertido com {shape[0]} linhas e {shape[1]} colunas.")
-                    
-                    
                     suggested_name = uploaded_file.name.replace('.csv', '.xlsx').replace('.txt', '.xlsx')
-                    
-                    
                     st.download_button(
-                        label="Baixar arquivo XLSX",
+                        "Baixar XLSX",
                         data=xlsx_data,
                         file_name=suggested_name,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
